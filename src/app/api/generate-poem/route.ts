@@ -1,173 +1,129 @@
 // src/app/api/generate-poem/route.ts
-import { NextResponse } from "next/server";
+export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
-/* ========= Utilidades ========= */
-const rng = (seed = Date.now()) => {
-  let x = seed % 2147483647;
-  if (x <= 0) x += 2147483646;
-  return () => (x = (x * 16807) % 2147483647) / 2147483647;
-};
-const pick = <T,>(r: () => number, arr: T[]) => arr[Math.floor(r() * arr.length)];
-const cap = (s: string) => s ? s[0].toUpperCase() + s.slice(1) : s;
-
-/* ======== Léxico medievalizante (B1/B2) ======== */
-const LEX = {
-  sujetos: ["caballero", "trovador", "juglar", "monje", "peregrino", "doncella", "señor", "villano", "escudero"],
-  acciones: ["canta", "cuenta", "recuerda", "invoca", "busca", "alaba", "llora", "promete", "guarda", "defiende"],
-  lugares: ["en la villa", "por la sierra", "en el castillo", "junto al río", "en la corte", "en la frontera", "bajo la luna"],
-  tiempos: ["esta mañana", "al anochecer", "en la alborada", "en la vigilia", "en romería", "tras la batalla"],
-  objetos: ["la honra", "su fe", "la mesnada", "la espada", "el pendón", "el laúd", "el pan y el vino"],
-  conectores: ["y", "pero", "aunque", "mientras", "cuando"],
-  adjetivos: ["leal", "piadoso", "firme", "honrado", "antiguo", "severo", "bravo", "humilde", "valiente"],
-  fórmulas: [
-    "¡Dios y mi señor!",
-    "por vida vuestra",
-    "a la merced del cielo",
-    "con mesura",
-    "si pluguiese",
-    "según fuero antiguo",
-  ],
-  motivos: [
-    "la deuda de vasallaje",
-    "el consejo del buen juez",
-    "el rumor de la frontera",
-    "el precio del honor",
-    "la palabra empeñada",
-  ],
+type ReqA = { topic?: string; form?: 'romance'|'cuaderna'|'copla'|'redondilla'; seed?: number };
+type ReqB = {
+  character?: string; location?: string; event?: string; emotion?: string;
+  language?: 'spanish'|'english'|'chinese';
 };
 
-/* Rimas asonantes por vocal (para romances y pareados sencillos) */
-const RIMAS: Record<string, string[]> = {
-  a: ["amada", "honrada", "sagrada", "templada", "callada", "soñada"],
-  e: ["fuerte", "breve", "suerte", "verde", "puente"],
-  o: ["honor", "amor", "señor", "dolor", "rigor", "clamor"],
-  i: ["servir", "decir", "venir", "sentir", "vivir", "pedir"],
-};
+function buildPrompt(input: ReqA & ReqB) {
+  // Acepta ambos formatos de tu app (tema+forma) o (character/location/…)
+  const form = (input.form || 'romance').toLowerCase();
+  const language = (input.language || 'spanish') as 'spanish'|'english'|'chinese';
 
-/* ========= Silabación aprox. y ajuste ========= */
-const contarSilabas = (verso: string) => {
-  const limpio = verso
-    .toLowerCase()
-    .replace(/[^a-záéíóúüñ\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const grupos = (limpio.match(/[aeiouáéíóúü]+/gi) || []).length;
-  return Math.max(4, grupos);
-};
-
-const extensores = ["muy", "tan", "más", "pues", "ya", "aún", "todavía", "bien"];
-const ajusta = (r: () => number, base: string, objetivo: number) => {
-  let v = base;
-  let n = contarSilabas(v);
-  let guard = 0;
-  while (n < objetivo && guard++ < 8) {
-    v = v.replace(/\b([a-záéíóúüñ]+)\b/i, `$1 ${pick(r, extensores)}`);
-    n = contarSilabas(v);
+  let brief = '';
+  if (input.topic) {
+    brief = `Tema: ${input.topic}.`;
+  } else {
+    brief =
+      `Personaje: ${input.character ?? 'caballero'}; ` +
+      `Lugar: ${input.location ?? 'castillo'}; ` +
+      `Acción: ${input.event ?? 'batalla'}; ` +
+      `Emoción: ${input.emotion ?? 'honra'}.`;
   }
-  return v;
-};
 
-/* ========= Construcción de versos ========= */
-const versoLibre = (r: () => number, tema?: string) => {
-  // 1–2 fórmulas opcionales para sabor medieval
-  const prefijo = Math.random() < 0.4 ? pick(r, LEX.fórmulas) + ", " : "";
-  const s = pick(r, LEX.sujetos);
-  const a = pick(r, LEX.acciones);
-  const complemento = tema ? `el ${tema}` : pick(r, LEX.objetos);
-  const l = pick(r, LEX.lugares);
-  const t = pick(r, LEX.tiempos);
-  const adj = pick(r, LEX.adjetivos);
-  const motivo = Math.random() < 0.35 ? `, por ${pick(r, LEX.motivos)}` : "";
-  return `${prefijo}${s} ${a} ${complemento} ${l} ${t} con ánimo ${adj}${motivo}`;
-};
+  // Instrucciones por forma métrica
+  const meters: Record<string,string> = {
+    romance:
+`• Romance castellano: versos octosílabos, rima asonante EN LOS VERSOS PARES; impares sueltos.
+• 3–4 estrofas (12–16 versos). Español medieval/arcaizante, léxico de honor, fe, frontera.
+• Evita modernismos. Mantén musicalidad y imágenes medievales.`,
 
-const aplicaAsonancia = (verso: string, finales: string[]) =>
-  verso.replace(/([a-záéíóúüñ]+)(\s*)$/i, `${pick(rng(), finales)}$2`);
+    cuaderna:
+`• Cuaderna vía: 14 sílabas (hemistiquios 7+7 con cesura), AAAA por estrofa.
+• 3 estrofas (12–16 versos máximo). Tono didáctico/épico. Léxico culto medieval.`,
 
-/* ========= Formas poéticas ========= */
+    copla:
+`• Copla arte menor (octosílabos) con rima consonante ABBA o ABAB.
+• 3–4 estrofas. Tono lírico, imaginería medieval.`,
 
-function cuadernaVia(r: () => number, tema?: string) {
-  // 4 versos ~14 sílabas, monorrima (AAAA). Aproximación docente.
-  const objetivo = 14;
-  const finales = pick(r, Object.values(RIMAS));
-  const versos = Array.from({ length: 4 }, () =>
-    aplicaAsonancia(ajusta(r, versoLibre(r, tema), objetivo), finales as string[])
-  );
-  return { scheme: "AAAA (cuaderna vía aprox.)", lines: versos };
+    redondilla:
+`• Redondilla (ABBA, octosílabos). 3–4 estrofas. Lirismo cortesano.`
+  };
+
+  const meterGuide = meters[form] ?? meters.romance;
+
+  // Idioma del resultado (tu curso es en ES; dejamos opción)
+  const langHeader =
+    language === 'english' ? 'Write in archaic English.' :
+    language === 'chinese' ? '以古典中文写作，仿中古风格。' :
+    'Escribe en español con sabor medieval.';
+
+  const system =
+`Eres un POETA MEDIEVAL experto (épica, mester de clerecía y tradición romancística).
+Sigues con rigor la métrica pedida y mantienes tono y léxico de la época.`;
+
+  const user =
+`${langHeader}
+
+${brief}
+
+Forma solicitada: ${form.toUpperCase()}
+Guía de métrica:
+${meterGuide}
+
+Formato de salida:
+1) Una sola línea de TÍTULO (sin adornos).
+2) Poema tal cual, sin comentarios, explicaciones ni notas.
+`;
+
+  return { system, user, language: language === 'english' ? 'english' : language === 'chinese' ? 'chinese' : 'spanish' };
 }
-
-function romance(r: () => number, tema?: string) {
-  // 8 versos ~8 sílabas; asonancia en pares (vocal aleatoria)
-  const objetivo = 8;
-  const vocal = pick(r, Object.keys(RIMAS));
-  const finales = RIMAS[vocal];
-  const versos: string[] = [];
-  for (let i = 1; i <= 8; i++) {
-    let v = ajusta(r, versoLibre(r, tema), objetivo);
-    if (i % 2 === 0) v = aplicaAsonancia(v, finales);
-    versos.push(v);
-  }
-  return { scheme: `asonancia en pares (-${vocal})`, lines: versos };
-}
-
-function pareado(r: () => number, tema?: string) {
-  // 2 versos ~11 sílabas; rima AA
-  const objetivo = 11;
-  const finales = pick(r, Object.values(RIMAS));
-  const v1 = aplicaAsonancia(ajusta(r, versoLibre(r, tema), objetivo), finales as string[]);
-  const v2 = aplicaAsonancia(ajusta(r, versoLibre(r, tema), objetivo), finales as string[]);
-  return { scheme: "AA (pareado)", lines: [v1, v2] };
-}
-
-/* ========= Handlers ========= */
 
 export async function POST(req: Request) {
   try {
-    const { topic = "", form = "romance", seed } = (await req.json().catch(() => ({}))) as {
-      topic?: string;
-      form?: "cuaderna" | "romance" | "pareado";
-      seed?: number;
-    };
+    const body = (await req.json()) as ReqA & ReqB;
+    const { system, user, language } = buildPrompt(body);
 
-    const r = rng(seed ?? Date.now());
-    const title = topic ? `Sobre ${cap(topic)}` : "Poema";
+    // === Llamada a un endpoint compatible con OpenAI (OpenAI u OpenRouter) ===
+    const apiKey = process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      return new Response(JSON.stringify({ error: 'Falta API key en variables de entorno.' }), { status: 500 });
+    }
 
-    const poem =
-      form === "cuaderna" ? cuadernaVia(r, topic) :
-      form === "pareado" ? pareado(r, topic) :
-      romance(r, topic);
+    // Si usas OpenAI directamente:
+    const endpoint = process.env.OPENAI_API_BASE ?? 'https://api.openai.com/v1/chat/completions';
+    const model = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
 
-    return NextResponse.json({ title, form, scheme: poem.scheme, lines: poem.lines });
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        ...(endpoint.includes('openrouter.ai') ? { 'HTTP-Referer': process.env.OPENROUTER_REFERRER ?? '', 'X-Title': 'versos-medievales' } : {})
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.85,
+        max_tokens: 900,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user }
+        ]
+      })
+    });
+
+    if (!res.ok) {
+      const t = await res.text();
+      return new Response(JSON.stringify({ error: 'Fallo en el proveedor', detail: t }), { status: 500 });
+    }
+
+    const data = await res.json() as any;
+    const full = (data.choices?.[0]?.message?.content ?? '').trim();
+    if (!full) return new Response(JSON.stringify({ error: 'Respuesta vacía del modelo' }), { status: 500 });
+
+    const lines = full.split('\n').filter(l => l.trim().length);
+    const title = lines.shift()?.trim() || 'Poema';
+    const content = lines.join('\n').trim();
+
+    return new Response(JSON.stringify({ title, content, language }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Error" }, { status: 500 });
+    return new Response(JSON.stringify({ error: 'Error generando poema', detail: String(e?.message || e) }), { status: 500 });
   }
-}
-
-/* GET opcional: pequeña UI de prueba en la propia ruta */
-export async function GET() {
-  const html = `<!doctype html><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Probar /api/generate-poem</title>
-  <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:2rem;color:#111}
-    input,select,button{font:inherit;padding:.5rem;margin:.25rem 0}
-    pre{background:#f6f6f6;padding:1rem;border-radius:10px}
-  </style>
-  <h1>🪶 Probar generador</h1>
-  <label>Tema <input id="topic" value="honra y camino"/></label>
-  <label>Forma 
-    <select id="form"><option>romance</option><option>cuaderna</option><option>pareado</option></select>
-  </label>
-  <label>Seed <input id="seed" type="number" placeholder="12345"/></label>
-  <button id="go">Generar</button>
-  <pre id="out">—</pre>
-  <script>
-  const $=s=>document.querySelector(s);
-  $("#go").onclick=async()=>{
-    const body={topic:$("#topic").value,form:$("#form").value,seed:$("#seed").value?Number($("#seed").value):undefined};
-    const res=await fetch("",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-    const data=await res.json();
-    $("#out").textContent = data.lines ? data.lines.join("\\n")+"\\n\\n("+data.form+" · "+data.scheme+")" : JSON.stringify(data,null,2);
-  };
-  </script>`;
-  return new NextResponse(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
 }
